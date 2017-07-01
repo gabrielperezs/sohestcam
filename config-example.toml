@@ -1,0 +1,22 @@
+
+label = true
+imagecodec = "png"
+imagelib = ""
+
+SplitVideoIn = "20m"
+
+GoogleProject = "/etc/sohestcam/sohestcam.json"
+tempdir = "/tmp/"
+
+CmdEncoder = "ffmpeg -v error -f image2pipe -codec png -i pipe:0 -s 640x480 -y -pattern_type glob -r 3 -c:v libx264 -crf 20 -pix_fmt yuv420p %s"
+
+[[camera]]
+Name = "Cam1"
+Url = "http://192.168.1.12/video.cgi?resolution=VGA"
+Active = true
+
+[[camera]]
+Name = "Cam2"
+Url = "http://192.168.1.11/video.cgi?resolution=VGA"
+Active = true
+

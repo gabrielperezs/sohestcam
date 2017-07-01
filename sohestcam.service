@@ -1,0 +1,16 @@
+[Unit]
+Description=Sohest Cam service
+After=network.target auditd.service
+
+[Service]
+Environment="USER=root"
+Environment="HOME=/root"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/usr/local/bin/sohestcam
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+#Alias=sohestcam.service
