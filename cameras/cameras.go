@@ -37,6 +37,8 @@ type Camera struct {
 	config utils.Config
 
 	interval *time.Ticker
+
+	lastImgage image.Image
 }
 
 func New(name, url string, config utils.Config) *Camera {
@@ -203,6 +205,14 @@ func (c *Camera) filter(body *bytes.Buffer) ([]byte, error) {
 		return nil, err
 	}
 
+	if c.lastImgage != nil {
+		if d := compare(imgSrc, c.lastImgage); d < 4 {
+			imgSrc = c.lastImgage
+		} else {
+			c.lastImgage = imgSrc
+		}
+	}
+
 	newImg := image.NewRGBA(imgSrc.Bounds())
 
 	// Copy original image over newImg
@@ -239,4 +249,45 @@ func (c *Camera) debugf(format string, e ...interface{}) {
 
 func (c *Camera) logf(format string, e ...interface{}) {
 	log.Printf(fmt.Sprint("[%s] ", format), c.Name, e)
+}
+
+func compare(source, target image.Image) float64 {
+
+	if source.ColorModel() != target.ColorModel() {
+		fmt.Println("different color models")
+		return 100
+	}
+
+	b := source.Bounds()
+	if !b.Eq(target.Bounds()) {
+		fmt.Println("different image sizes")
+		return 100
+	}
+
+	var sum int64
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r1, g1, b1, _ := source.At(x, y).RGBA()
+			r2, g2, b2, _ := target.At(x, y).RGBA()
+			if r1 > r2 {
+				sum += int64(r1 - r2)
+			} else {
+				sum += int64(r2 - r1)
+			}
+			if g1 > g2 {
+				sum += int64(g1 - g2)
+			} else {
+				sum += int64(g2 - g1)
+			}
+			if b1 > b2 {
+				sum += int64(b1 - b2)
+			} else {
+				sum += int64(b2 - b1)
+			}
+		}
+	}
+
+	nPixels := (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y)
+
+	return float64(sum*100) / (float64(nPixels) * 0xffff * 3)
 }

@@ -31,7 +31,7 @@ type encoder struct {
 func newEncoder(name string, config utils.Config) *encoder {
 	e := &encoder{
 		name:         name,
-		filename:     fmt.Sprintf("/tmp/%s-%s.avi", name, "test"),
+		filename:     fmt.Sprintf("%s/._recording-%s.avi", config.TempDir, name),
 		in:           make(chan []byte, 200),
 		stop:         make(chan bool, 1),
 		stdinCloseCh: make(chan bool, 1),
@@ -52,7 +52,7 @@ func (e *encoder) upload(file string) {
 
 	t := time.Now()
 
-	directory := fmt.Sprintf("%s/%s/%s/%s", googledrive.DirectoryName, e.name, t.Format("2006"), t.Format("01"))
+	directory := fmt.Sprintf("%s/%s/%s/%s/%s", googledrive.DirectoryName, t.Format("2006"), t.Format("01"), t.Format("02"), e.name)
 	d, err := gdc.CreateDirectory(directory)
 	if err != nil {
 		e.log("Error upload create dir: %s - %s", directory, err)
@@ -75,12 +75,6 @@ func (e *encoder) loop() {
 		case <-e.stdinCloseCh:
 			go e.start()
 		}
-	}
-}
-
-func (e *encoder) loopStdin() {
-	for {
-		e.stdin.Write(<-e.in)
 	}
 }
 
