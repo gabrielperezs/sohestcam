@@ -10,14 +10,22 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"image/png"
-	"log"
 	"net/http"
 	"strconv"
 
 	"time"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/gabrielperezs/sohestcam/utils"
 	"github.com/pbnjay/pixfont"
+)
+
+const (
+	framesSecondDuration         = (1000 / 15) * time.Millisecond
+	imageIgnorePtc       float64 = 1.05 // Ignore image frames who have a difference of % compared with the prev frame
+	imageTopLabelY               = 10
+	imageTopLabelX               = 600
 )
 
 type Camera struct {
@@ -25,6 +33,7 @@ type Camera struct {
 	Url     string
 	Debug   bool
 	counter int
+	ignored int
 
 	encoder *encoder
 
@@ -47,12 +56,10 @@ func New(name, url string, config utils.Config) *Camera {
 		config.ImageCodec = "png"
 	}
 
-	log.Println(config.VideoDuration)
-
 	c := &Camera{
 		Name:    name,
 		Url:     url,
-		Debug:   false,
+		Debug:   config.Debug,
 		counter: 0,
 
 		encoder: newEncoder(name, config),
@@ -61,11 +68,15 @@ func New(name, url string, config utils.Config) *Camera {
 		size:   0,
 		date:   "",
 
-		background: image.NewRGBA(image.Rect(1, 1, 600, 10)),
+		background: image.NewRGBA(image.Rect(1, 1, imageTopLabelX, imageTopLabelY)),
 
 		config: config,
 
 		interval: time.NewTicker(config.VideoDuration),
+	}
+
+	if c.Debug {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	go c.loop()
@@ -79,27 +90,23 @@ func New(name, url string, config utils.Config) *Camera {
 func (c *Camera) timer() {
 	for {
 		<-c.interval.C
-		c.logf("Stop video afer %s", c.config.VideoDuration.String())
+		log.Debugf("[%s] Stop video afer %s", c.Name, c.config.VideoDuration.String())
 		select {
 		case c.encoder.stop <- true:
 		default:
-			c.logf("can't send signal to stop to encoder")
+			log.Debugf("[%s] can't send signal to stop to encoder", c.Name)
 		}
 	}
 }
 
 func (c *Camera) loop() {
 	for {
-
 		resp, err := http.Get(c.Url)
 		if err != nil {
-			c.logf("http client: %s", err.Error())
-
-			// Retry in 1 second
+			log.Debugf("[%s] http client: %s", c.Name, err)
 			<-time.After(time.Second * 1)
 			continue
 		}
-
 		c.reader(resp)
 	}
 }
@@ -107,47 +114,55 @@ func (c *Camera) loop() {
 func (c *Camera) reader(resp *http.Response) {
 
 	c.header = true
+	body := &bytes.Buffer{}
+	lastFrame := time.Now()
 
 	reader := bufio.NewReader(resp.Body)
-
-	body := &bytes.Buffer{}
 
 	for {
 
 		chunk, err := reader.ReadBytes('\n')
 		if err != nil {
-			c.logf("reader error: %s", err.Error())
+			log.Errorf("[%s] reader error: %s", c.Name, err)
 			return
 		}
 
 		if c.header {
-
 			c.readHeader(chunk)
+			continue
+		}
 
-		} else {
+		body.Write(chunk)
 
-			body.Write(chunk)
+		if body.Len() >= c.size {
+			c.header = true
 
-			if body.Len() >= c.size {
-				c.header = true
-				c.debugf("End of body %d", body.Len())
-
-				img, err := c.filter(body)
-				if err != nil {
-					c.logf("Filter image error %s", err)
-					body.Reset()
-					continue
-				}
-
-				select {
-				case c.encoder.in <- img:
-					// Send frame
-				default:
-					c.logf("Chan full")
-				}
-
+			if time.Now().Add(framesSecondDuration).Before(lastFrame) {
+				log.Debugf("[%s] Discard frame %s", c.Name, lastFrame)
 				body.Reset()
+				continue
 			}
+
+			img, err := c.filter(body)
+			if err != nil {
+				log.Debugf("[%s] filter: %s", c.Name, err)
+				body.Reset()
+				continue
+			}
+
+			if len(img) <= 0 {
+				continue
+			}
+
+			select {
+			case c.encoder.in <- img:
+				lastFrame = time.Now()
+				// Send frame
+			default:
+				log.Errorf("[%s] Chan full, %d images queued", c.Name, len(c.encoder.in))
+			}
+
+			body.Reset()
 
 		}
 	}
@@ -166,27 +181,20 @@ func (c *Camera) readHeader(chunk []byte) {
 		s := bytes.Split(chunk, []byte(" "))
 		size, err := strconv.Atoi(string(s[1]))
 		if err != nil {
-			log.Println("Error", err)
+			log.Errorf("[%s] Content-length: %s", c.Name, err)
 		}
-		c.debugf("%s | %s", string(chunk), size)
 		c.size = size
-
 		return
 	}
 
 	if bytes.HasPrefix(chunk, []byte("Date")) {
-		c.debugf("%s", string(chunk))
-
 		chunk = bytes.Replace(chunk, []byte("\n"), []byte(""), -1)
 		chunk = bytes.Replace(chunk, []byte("\r"), []byte(""), -1)
-
 		c.date = string(chunk)
-
 		return
 	}
 
 	if bytes.HasPrefix(chunk, []byte("Content-type")) {
-		c.debugf("%s", string(chunk))
 		return
 	}
 
@@ -200,19 +208,19 @@ func (c *Camera) filter(body *bytes.Buffer) ([]byte, error) {
 	imgSrc, err := jpeg.Decode(body)
 
 	if err != nil {
-		c.logf("jpeg ERROR: %s", err.Error())
-		c.logf("jpeg header err: %s", hex.EncodeToString(body.Bytes()[:2]))
+		log.Errorf("[%s] jpeg ERROR: %s", c.Name, err.Error())
+		log.Errorf("[%s] jpeg header err: %s", c.Name, hex.EncodeToString(body.Bytes()[:2]))
 		return nil, err
 	}
 
-	if c.lastImgage != nil {
-		if d := compare(imgSrc, c.lastImgage); d < 4 {
-			imgSrc = c.lastImgage
-		} else {
-			c.lastImgage = imgSrc
-		}
+	d := compare(imgSrc, c.lastImgage)
+	c.lastImgage = imgSrc
+
+	if d < imageIgnorePtc {
+		return []byte(""), nil
 	}
 
+	c.lastImgage = imgSrc
 	newImg := image.NewRGBA(imgSrc.Bounds())
 
 	// Copy original image over newImg
@@ -235,38 +243,30 @@ func (c *Camera) filter(body *bytes.Buffer) ([]byte, error) {
 		jpeg.Encode(&imageBytes, newImg, nil)
 		break
 	default:
-		log.Panic("Invalid image codec:", c.config.ImageCodec)
+		log.Panicf("[%s] Invalid image codec: %s", c.Name, c.config.ImageCodec)
 	}
 
 	return imageBytes.Bytes(), nil
 }
 
-func (c *Camera) debugf(format string, e ...interface{}) {
-	if c.Debug {
-		log.Printf(fmt.Sprint("[%s] debug", format), c.Name, e)
-	}
-}
-
-func (c *Camera) logf(format string, e ...interface{}) {
-	log.Printf(fmt.Sprint("[%s] ", format), c.Name, e)
-}
-
 func compare(source, target image.Image) float64 {
 
+	if target == nil {
+		return 100
+	}
+
 	if source.ColorModel() != target.ColorModel() {
-		fmt.Println("different color models")
 		return 100
 	}
 
 	b := source.Bounds()
 	if !b.Eq(target.Bounds()) {
-		fmt.Println("different image sizes")
 		return 100
 	}
 
 	var sum int64
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
+	for y := b.Min.Y + imageTopLabelY; y < b.Max.Y; y++ {
+		for x := b.Min.X + imageTopLabelX; x < b.Max.X; x++ {
 			r1, g1, b1, _ := source.At(x, y).RGBA()
 			r2, g2, b2, _ := target.At(x, y).RGBA()
 			if r1 > r2 {
@@ -287,7 +287,8 @@ func compare(source, target image.Image) float64 {
 		}
 	}
 
-	nPixels := (b.Max.X - b.Min.X) * (b.Max.Y - b.Min.Y)
+	//nPixels := (b.Max.X - (b.Min.X + imageTopLabelX)) * (b.Max.Y - (b.Min.Y + imageTopLabelY))
+	nPixels := (b.Max.X - b.Min.X - imageTopLabelX) * (b.Max.Y - b.Min.Y - imageTopLabelY)
 
 	return float64(sum*100) / (float64(nPixels) * 0xffff * 3)
 }

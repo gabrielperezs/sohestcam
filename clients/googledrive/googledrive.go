@@ -2,7 +2,7 @@ package googledrive
 
 import (
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"mime"
 	"net/http"
 	"os"

@@ -3,12 +3,13 @@ package cameras
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/gabrielperezs/sohestcam/clients/googledrive"
 	"github.com/gabrielperezs/sohestcam/utils"
@@ -24,6 +25,7 @@ type encoder struct {
 	stdin        io.WriteCloser
 	stdinCloseCh chan bool
 	dateStart    time.Time
+	readTicker   *time.Ticker
 
 	config utils.Config
 }
@@ -36,6 +38,7 @@ func newEncoder(name string, config utils.Config) *encoder {
 		stop:         make(chan bool, 1),
 		stdinCloseCh: make(chan bool, 1),
 		config:       config,
+		readTicker:   time.NewTicker(framesSecondDuration),
 	}
 
 	go e.start()
@@ -69,8 +72,8 @@ func (e *encoder) loop() {
 			e.log("stop signal")
 			e.subProcess.Process.Signal(syscall.SIGINT)
 			break
-		case in := <-e.in:
-			e.stdin.Write(in)
+		case <-e.readTicker.C:
+			e.stdin.Write(<-e.in)
 			break
 		case <-e.stdinCloseCh:
 			go e.start()

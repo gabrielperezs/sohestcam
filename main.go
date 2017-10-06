@@ -4,7 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
+
+	log "github.com/sirupsen/logrus"
 
 	"time"
 
@@ -22,6 +23,16 @@ var done = make(chan bool, 1)
 func init() {
 	flag.StringVar(&cfgfile, "config", "/etc/sohestcam/config.toml", "Configuration file")
 	flag.Parse()
+
+	log.SetLevel(log.InfoLevel)
+	if config.Debug {
+		log.SetLevel(log.DebugLevel)
+	}
+
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: false,
+		FullTimestamp: true,
+	})
 }
 
 func main() {
@@ -59,7 +70,7 @@ func startOrReload() {
 
 	testGoogleDrive()
 
-	log.Printf("Starting VideoDuration %s GoogleDrive %v", config.VideoDuration.String(), true)
+	log.Infof("Starting VideoDuration %s GoogleDrive %v", config.VideoDuration.String(), true)
 
 	for _, c := range config.Cameras {
 		if !c.Active {

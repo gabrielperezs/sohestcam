@@ -9,6 +9,7 @@ type Config struct {
 	CmdEncoder string
 	ImageCodec string
 	ImageLib   string
+	Debug      bool
 
 	SplitVideoIn  string
 	VideoDuration time.Duration
